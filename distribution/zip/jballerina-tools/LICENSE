@@ -62,7 +62,7 @@ module_cli_token_updater.jar                                                    
 jsonutils.jar                                                                                       jar            apache2
 asm-analysis-7.1.jar                                                                                bundle         bsd
 ballerina-openshift-1.1.0.jar                                                                       jar            apache2
-kafka-clients-2.0.1.jar                                                                             jar            apache2
+kafka-clients-3.9.1.jar                                                                             jar            apache2
 openshift.jar                                                                                       jar            apache2
 ballerina-to-openapi-generator-1.1.0.jar                                                            jar            apache2
 ballerina-rt-1.1.0.jar                                                                              jar            apache2
