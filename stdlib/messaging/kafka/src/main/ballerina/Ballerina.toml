@@ -25,3 +25,4 @@ target = "java8"
     path = "./lib/kafka_2.13-3.7.2.jar"
     groupId = "org.apache.kafka"
     modules = ["kafka"]
+    scope = "testOnly"
