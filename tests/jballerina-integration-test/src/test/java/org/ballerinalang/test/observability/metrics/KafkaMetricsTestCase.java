@@ -18,6 +18,7 @@
 
 package org.ballerinalang.test.observability.metrics;
 
+import kafka.server.KafkaConfig;
 import org.ballerinalang.jvm.observability.ObservabilityConstants;
 import org.ballerinalang.messaging.kafka.utils.KafkaCluster;
 import org.ballerinalang.test.BaseTest;
@@ -69,8 +70,8 @@ public class KafkaMetricsTestCase extends BaseTest {
         args.add("--" + ObservabilityConstants.CONFIG_METRICS_ENABLED + "=true");
         args.add("--b7a.log.console.loglevel=ERROR");
         Properties brokerProperties = new Properties();
-        brokerProperties.setProperty("zookeeper.session.timeout.ms", Integer.toString(20000));
-        brokerProperties.setProperty("auto.create.topics.enable", "false");
+        brokerProperties.setProperty(KafkaConfig.ZkSessionTimeoutMsProp(), Integer.toString(20000));
+        brokerProperties.setProperty(KafkaConfig.AutoCreateTopicsEnableProp(), "false");
         kafkaCluster = new KafkaCluster(dataDir, null, propertyResources)
                 .withZookeeper(14010)
                 .withBroker(PROTOCOL_PLAINTEXT, 14110, brokerProperties)
