@@ -160,4 +160,63 @@ public class ArtifactoryClient {
             throw new IOException("Failed to pull package from artifactory : " + e.getMessage(), e);
         }
     }
+
+    /*
+     * Method: pullPackage (overload)
+     * Params:
+     *   - org : String      (organization name)
+     *   - pkgName : String  (package name)
+     * Description: Fetches the latest version (via getLatestVersion) and pulls that package.
+     */
+
+    public void pullPackage(String org, String pkgName) throws IOException {
+        try {
+            String latestVersion = getLatestVersion(org, pkgName);
+            System.out.println("Latest version: " + latestVersion);
+            pullPackage(org, pkgName, latestVersion);
+        } catch (Exception e) {
+            throw new IOException("Failed to pull package from artifactory : " + e.getMessage());
+        }
+    }
+
+
+    /*
+     * Params:
+     *   - org : String          (organization name)
+     *   - packageName : String  (package name)
+     *   Description: Queries the repository for available versions and returns the latest according to SemVer.
+     */
+
+    public String getLatestVersion(String org, String packageName) throws IOException {
+        String requestPath = org + "/" + packageName;
+        Request.Builder requestBuilder = createRequestBuilder(requestPath).get();
+        OkHttpClient client = this.httpClient();
+        try (Response response = client.newCall(requestBuilder.build()).execute()) {
+            if (!response.isSuccessful()) {
+                throw new IOException("Failed to get latest version from artifactory: " + response.message());
+            }
+            ResponseBody rb = response.body();
+            if (rb == null) {
+                throw new IOException("Empty response body when fetching versions");
+            }
+            String versionData = rb.string();
+            System.out.println("Latest version fetched successfully from artifactory with status code: " + response.code());
+            JsonObject gsonObj = new Gson().fromJson(versionData, JsonObject.class);
+            JsonArray jsonVersions = gsonObj.getAsJsonArray("versions");
+            if (jsonVersions == null) {
+                throw new IOException("No 'versions' array found in response");
+            }
+            Type listType = new TypeToken<List<String>>() {}.getType();
+            List<String> versions = new Gson().fromJson(jsonVersions, listType);
+            if (versions == null || versions.isEmpty()) {
+                throw new IOException("No versions available for package: " + org + "/" + packageName);
+            }
+            return Collections.max(versions, (v1, v2) -> SemVerUtils.compareSemVer(v1, v2));
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Failed to get latest version from artifactory : " + e.getMessage(), e);
+        }
+    }
+
 }
