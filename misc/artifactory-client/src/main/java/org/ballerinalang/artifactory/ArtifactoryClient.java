@@ -117,4 +117,47 @@ public class ArtifactoryClient {
     }
 
 
+    /*
+     * Method: pullPackage
+     * Params:
+     *   - org : String       (organization name)
+     *   - pkgName : String   (package name)
+     *   - version : String   (package version)
+     * Description: Downloads the specified .bala file from Artifactory and saves it to the local repo.
+     */
+
+    public void pullPackage(String org, String pkgName, String version) throws IOException {
+        System.out.println("Pulling package from artifactory...");
+        String requestPath = org + "/" + pkgName + "/" + version + "/" + org + "-" + pkgName + "-any-" + version + ".bala";
+        Map<String, String> checksums = fetchRemoteChecksums(requestPath);
+        Request.Builder requestBuilder = createRequestBuilder(requestPath).get();
+        OkHttpClient client = this.httpClient();
+
+        try (Response requestFile = client.newCall(requestBuilder.build()).execute()) {
+            if (requestFile.isSuccessful()) {
+                System.out.println("Package pulled successfully from artifactory with status code: " + requestFile.code());
+                // build a platform-independent local path from the requestPath segments
+                String[] segments = requestPath.split("/");
+                Path artifactorypath = this.localRepoBase;
+                for (String s : segments) {
+                    artifactorypath = artifactorypath.resolve(s);
+                }
+                ChecksumUtils.saveResponseToFile(requestFile, artifactorypath, checksums);
+
+            } else {
+                // Read body (if any) for debugging and include headers
+                String respBody = "";
+                try {
+                    ResponseBody rb = requestFile.body();
+                    if (rb != null) respBody = rb.string();
+                } catch (Exception e) {
+                    respBody = "<error reading body: " + e.getMessage() + ">";
+                }
+
+                throw new IOException("Failed to pull package from artifactory: " + requestFile.code() + " - " + respBody);
+            }
+        } catch (IOException e) {
+            throw new IOException("Failed to pull package from artifactory : " + e.getMessage(), e);
+        }
+    }
 }
