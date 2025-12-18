@@ -28,7 +28,6 @@ public class ArtifactoryClient {
     private final String username;
     private final String password;
     private final Path localRepoBase; // base directory for local artifactory cache
-    private final Path envBalaPath; // optional BALA path from environment
     private static final String[][] HEADER_MAP = {
             {"X-Checksum-Sha256", ".sha256", "SHA-256"},
             {"X-Checksum-Sha1", ".sha1", "SHA-1"},
@@ -39,10 +38,6 @@ public class ArtifactoryClient {
         this(repositoryUrl, username, password, null);
     }
 
-    /**
-     * New constructor which accepts an explicit local repo base path. If localRepoBase is null,
-     * it defaults to {user.home}/.ballerina/repositories/artifactory
-     */
     public ArtifactoryClient(String repositoryUrl, String username, String password, Path localRepoBase) {
         this.repositoryUrl = repositoryUrl;
         this.username = username;
@@ -53,9 +48,9 @@ public class ArtifactoryClient {
         } else {
             this.localRepoBase = Paths.get(System.getProperty("user.home"), ".ballerina", "repositories", "artifactory");
         }
-        // optional environment override for a BALA to push
-        String env = System.getenv("BALLERINA_BALA_PATH");
-        this.envBalaPath = (env != null && !env.isEmpty()) ? Paths.get(env) : null;
+//        // optional environment override for a BALA to push
+//        String env = System.getenv("BALLERINA_BALA_PATH");
+//        this.envBalaPath = (env != null && !env.isEmpty()) ? Paths.get(env) : null;
     }
 
     /*
@@ -219,4 +214,47 @@ public class ArtifactoryClient {
         }
     }
 
+    /*
+     * Method: pushPackage
+     * Params:
+     *   - org : String      (organization name)
+     *   - pkg : String      (package name)
+     *   - version : String  (package version)
+     * Description: Uploads a .bala file to Artifactory with checksum headers.
+     */
+
+    public void pushPackage(String org, String pkg, String version,Path balaPath) throws IOException {
+
+        if (balaPath == null || !Files.exists(balaPath)) {
+            throw new IOException("BALA file not found. Set BALLERINA_BALA_PATH environment variable or place the BALA at ./target/bala/<org>-<pkg>-any-<version>.bala");
+        }
+
+        System.out.println("Pushing package to artifactory... using BALA: " + balaPath);
+        try {
+            RequestBody requestBody = RequestBody.create(balaPath.toFile(), MediaType.parse("application/octet-stream"));
+            String targetPath = org + "/" + pkg + "/" + version + "/" + balaPath.toFile().getName();
+            System.out.println(targetPath);
+            String md5CheckSum = Objects.toString(ChecksumUtils.calculateChecksum(balaPath.toString(), "MD5"), "");
+            String sha256CheckSum = Objects.toString(ChecksumUtils.calculateChecksum(balaPath.toString(), "SHA-256"), "");
+            String sha1CheckSum = Objects.toString(ChecksumUtils.calculateChecksum(balaPath.toString(), "SHA-1"), "");
+            System.out.println("Calculated MD5 checksum: " + md5CheckSum + " Calculated SHA1 checksum: " + sha1CheckSum + " Calculated SHA256 checksum: " + sha256CheckSum);
+
+            Request.Builder reqBuilder = createRequestBuilder(targetPath);
+            if (!md5CheckSum.isEmpty()) reqBuilder.header("X-Checksum-Md5", md5CheckSum);
+            if (!sha1CheckSum.isEmpty()) reqBuilder.header("X-Checksum-Sha1", sha1CheckSum);
+            if (!sha256CheckSum.isEmpty()) reqBuilder.header("X-Checksum-Sha256", sha256CheckSum);
+            Request request = reqBuilder.put(requestBody).build();
+
+            OkHttpClient client = this.httpClient();
+            try (Response response = client.newCall(request).execute()) {
+                if (response.isSuccessful()) {
+                    System.out.println("Package pushed successfully to artifactory with status code: " + response.code());
+                } else {
+                    throw new IOException("Failed to push package to artifactory: " + response.message());
+                }
+            }
+        } catch (Exception e) {
+            System.out.println("Failed to push package to artifactory : " + e.getMessage());
+        }
+    }
 }
