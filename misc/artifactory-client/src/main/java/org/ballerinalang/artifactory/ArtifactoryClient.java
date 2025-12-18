@@ -1,3 +1,21 @@
+/*
+ *  Copyright (c) 2020, WSO2 Inc. (http://www.wso2.org) All Rights Reserved.
+ *
+ *  WSO2 Inc. licenses this file to you under the Apache License,
+ *  Version 2.0 (the "License"); you may not use this file except
+ *  in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing,
+ *  software distributed under the License is distributed on an
+ *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ *  KIND, either express or implied.  See the License for the
+ *  specific language governing permissions and limitations
+ *  under the License.
+ */
+
 package org.ballerinalang.artifactory;
 
 import com.google.gson.JsonArray;
@@ -78,7 +96,6 @@ public class ArtifactoryClient {
 
     public Request.Builder createRequestBuilder(String packagePath) {
         String url = this.repositoryUrl + "/" + packagePath;
-        System.out.println("Request URL: " + url);
         return new Request.Builder().url(url).header("Authorization", Credentials.basic(this.username, this.password));
     }
 
@@ -107,7 +124,6 @@ public class ArtifactoryClient {
         } catch (IOException e) {
             System.err.println("HEAD request failed for " + packagePath + ": " + e.getMessage());
             return checksums;
-            // continue to fallback GETs
         }
     }
 
@@ -201,7 +217,8 @@ public class ArtifactoryClient {
             if (jsonVersions == null) {
                 throw new IOException("No 'versions' array found in response");
             }
-            Type listType = new TypeToken<List<String>>() {}.getType();
+            Type listType = new TypeToken<List<String>>() {
+            }.getType();
             List<String> versions = new Gson().fromJson(jsonVersions, listType);
             if (versions == null || versions.isEmpty()) {
                 throw new IOException("No versions available for package: " + org + "/" + packageName);
@@ -223,17 +240,28 @@ public class ArtifactoryClient {
      * Description: Uploads a .bala file to Artifactory with checksum headers.
      */
 
-    public void pushPackage(String org, String pkg, String version,Path balaPath) throws IOException {
+    public void pushPackage(Path balaPath) throws IOException {
 
         if (balaPath == null || !Files.exists(balaPath)) {
             throw new IOException("BALA file not found. Set BALLERINA_BALA_PATH environment variable or place the BALA at ./target/bala/<org>-<pkg>-any-<version>.bala");
         }
-
-        System.out.println("Pushing package to artifactory... using BALA: " + balaPath);
+        // Derive version from filename using the last occurrence of "-any-" which is the stable delimiter
+        String fileName = balaPath.getFileName().toString();
+        int anyIdx = fileName.lastIndexOf("-any-");
+        if (anyIdx == -1) {
+            throw new IOException("Invalid BALA filename, expected '-any-' delimiter: " + fileName);
+        }
+        String versionWithExt = fileName.substring(anyIdx + "-any-".length());
+        String org = fileName.substring(0, fileName.indexOf("-"));
+        String pkg = fileName.substring(fileName.indexOf("-") + 1, anyIdx);
+        String version = versionWithExt.endsWith(".bala") ? versionWithExt.substring(0, versionWithExt.length() - ".bala".length()) : versionWithExt;
+        // Validate SemVer and refuse to push invalid versions (e.g., leading zeros like 01.0.1)
+        if (!SemVerUtils.isValidSemVer(version)) {
+            throw new IOException("Invalid semantic version extracted from BALA filename: '" + version + "'. Upload aborted.");
+        }
         try {
             RequestBody requestBody = RequestBody.create(balaPath.toFile(), MediaType.parse("application/octet-stream"));
             String targetPath = org + "/" + pkg + "/" + version + "/" + balaPath.toFile().getName();
-            System.out.println(targetPath);
             String md5CheckSum = Objects.toString(ChecksumUtils.calculateChecksum(balaPath.toString(), "MD5"), "");
             String sha256CheckSum = Objects.toString(ChecksumUtils.calculateChecksum(balaPath.toString(), "SHA-256"), "");
             String sha1CheckSum = Objects.toString(ChecksumUtils.calculateChecksum(balaPath.toString(), "SHA-1"), "");
@@ -253,8 +281,21 @@ public class ArtifactoryClient {
                     throw new IOException("Failed to push package to artifactory: " + response.message());
                 }
             }
+        } catch (IOException ioe) {
+            // propagate IOExceptions (including invalid version) to the caller
+            throw ioe;
         } catch (Exception e) {
-            System.out.println("Failed to push package to artifactory : " + e.getMessage());
+            // wrap other unexpected exceptions as IOExceptions so caller gets a failure
+            throw new IOException("Failed to push package to artifactory : " + e.getMessage(), e);
+        }
+    }
+
+    public static void main(String[] args) {
+        ArtifactoryClient artifactoryClient = new ArtifactoryClient("http://localhost:8082/artifactory/ballerina-packages", "admin", "Ranvin@0713");
+        try {
+            artifactoryClient.pushPackage(Paths.get("C:\\Users\\Ranvin\\Documents\\Ballerina\\Artifactory\\hello_world\\target\\bala\\ranvin-hello_world-any-1.0.1-beta.bala"));
+        } catch (IOException e) {
+            e.printStackTrace();
         }
     }
 }

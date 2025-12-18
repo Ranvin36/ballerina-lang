@@ -1,3 +1,21 @@
+/*
+ *  Copyright (c) 2020, WSO2 Inc. (http://www.wso2.org) All Rights Reserved.
+ *
+ *  WSO2 Inc. licenses this file to you under the Apache License,
+ *  Version 2.0 (the "License"); you may not use this file except
+ *  in compliance with the License.
+ *  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ *  Unless required by applicable law or agreed to in writing,
+ *  software distributed under the License is distributed on an
+ *  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ *  KIND, either express or implied.  See the License for the
+ *  specific language governing permissions and limitations
+ *  under the License.
+ */
+
 package org.ballerinalang.artifactory.utils;
 
 import java.util.regex.Matcher;
@@ -6,14 +24,24 @@ import java.util.regex.Pattern;
 /**
  * Utility methods for parsing and comparing Semantic Version (SemVer) strings.
  * <p>
- * This class centralizes SemVer logic so it can be reused by clients (Artifactory, Central, etc.).
+ * This class centralizes SemVer logic so it can be reused by clients (Artifactory, Nexus, etc.).
  */
 public final class SemVerUtils {
     private static final String SEMVER_PATTERN =
-            "^(\\d+)\\.(\\d+)\\.(\\d+)(?:-([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$";
+            "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)" +
+                    "(?:-([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?" +
+                    "(?:\\+([0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*))?$";
     private static final Pattern PATTERN = Pattern.compile(SEMVER_PATTERN);
 
     private SemVerUtils() {
+    }
+
+    /**
+     * Quick validation that returns true when the provided version matches SemVer.
+     */
+    public static boolean isValidSemVer(String version) {
+        if (version == null) return false;
+        return PATTERN.matcher(version).matches();
     }
 
     /**
@@ -86,4 +114,3 @@ public final class SemVerUtils {
         return Integer.compare(parts1.length, parts2.length);
     }
 }
-
