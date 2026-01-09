@@ -1,7 +1,18 @@
+
+
 plugins {
     id 'java'
     id 'application'
 }
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+sourceCompatibility = JavaVersion.VERSION_21
+targetCompatibility = JavaVersion.VERSION_21
 
 group = 'org.ballerinalang'
 version = '2201.14.0-SNAPSHOT'
@@ -13,13 +24,17 @@ repositories {
 dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.11.0'
     implementation 'com.google.code.gson:gson:2.10.1'
-    testImplementation platform('org.junit:junit-bom:5.10.0')
-    testImplementation 'org.junit.jupiter:junit-jupiter'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    implementation project(':central-client')
+    // Test framework: TestNG
+    testImplementation 'org.testng:testng:7.8.0'
+
+    // MockWebServer for HTTP integration tests
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.11.0'
 }
 
+// Configure Gradle test task to use TestNG (matches the test annotations in this module)
 test {
-    useJUnitPlatform()
+    useTestNG()
 }
 application {
     mainClass = 'org.ballerinalang.artifactory.ArtifactoryClient'
