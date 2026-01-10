@@ -120,8 +120,25 @@ public class ArtifactoryClient {
      */
     public ArtifactoryClient(String repositoryUrl, String username, String password, Path localRepoBase,
                              PrintStream outStream) {
-        this.repositoryUrl = repositoryUrl;
-        this.username = username;
+        // Validate constructor inputs early and provide clear errors.
+        if (repositoryUrl == null || repositoryUrl.trim().isEmpty()) {
+            throw new IllegalArgumentException("repositoryUrl must be provided and non-empty");
+        }
+        if (username == null || username.trim().isEmpty()) {
+            throw new IllegalArgumentException("username must be provided and non-empty");
+        }
+        if (password == null || password.isEmpty()) {
+            throw new IllegalArgumentException("password must be provided and non-empty");
+        }
+
+        // Ensure repositoryUrl is a syntactically valid URL that OkHttp can work with.
+        // Use HttpUrl.parse to detect malformed URLs early.
+        if (HttpUrl.parse(repositoryUrl.trim()) == null) {
+            throw new IllegalArgumentException("Invalid repositoryUrl: " + repositoryUrl);
+        }
+
+        this.repositoryUrl = repositoryUrl.trim();
+        this.username = username.trim();
         this.password = password;
         this.outStream = outStream == null ? System.out : outStream;
         // prefer provided base, otherwise default under user.home
@@ -173,12 +190,35 @@ public class ArtifactoryClient {
                          checksums.put(map[2], header.trim());
                      }
                  }
+                 return checksums;
+             } else {
+                 int code = headResp.code();
+                 // Treat 404 (not found) as "no checksums available" and return empty map so callers may
+                 // attempt to download the artifact. For other error codes, surface an IOException so the
+                 // caller can decide how to handle repository errors (auth, server error, etc.).
+                 if (code == 404) {
+                     return checksums;
+                 }
+
+                 String respBody = "";
+                 try {
+                     ResponseBody rb = headResp.body();
+                     if (rb != null) respBody = rb.string();
+                 } catch (Exception e) {
+                     respBody = "<error reading body: " + e.getMessage() + ">";
+                 }
+
+                 // Log diagnostic info then throw to make the failure explicit to callers
+                 outStream.println("Error: Failed to fetch checksum headers for '" + packagePath + "' - HTTP/" + code + ": " + respBody);
+                 throw new IOException("Failed to fetch checksum headers for '" + packagePath + "' - HTTP/" + code + ": " + respBody);
              }
-             return checksums;
-             
+
          } catch (IOException e) {
-            outStream.println("Warning: Failed to fetch checksum headers via HEAD request: " + e.getMessage());
-            return checksums;
+            // Network/IO issues should be propagated to the caller for proper handling
+            throw e;
+         } catch (Exception e) {
+            // Wrap unexpected exceptions as IOExceptions
+            throw new IOException("Unexpected error while fetching checksum headers: " + e.getMessage(), e);
          }
      }
 
@@ -220,6 +260,11 @@ public class ArtifactoryClient {
         // Strip any remaining surrounding quotes
         if ((filename.startsWith("\'") && filename.endsWith("\'")) || (filename.startsWith("\"") && filename.endsWith("\""))) {
             filename = filename.substring(1, filename.length() - 1);
+        }
+        // Extract base filename only to prevent path traversal attacks (e.g., ../../etc/passwd)
+        filename = new java.io.File(filename).getName();
+        if (filename.isEmpty()) {
+            return "";
         }
         // Finally, return a header string prefixed with 'attachment; filename='
         return "attachment; filename=" + filename;
@@ -313,13 +358,6 @@ public class ArtifactoryClient {
         }
     }
 
-    /*
-     * Method: pullPackage (overload)
-     * Params:
-     *   - org : String      (organization name)
-     *   - pkgName : String  (package name)
-     * Description: Fetches the latest version (via getLatestVersion) and pulls that package.
-     */
 
     /**
      * Fetch the latest available version for the given package and download it.
@@ -350,14 +388,6 @@ public class ArtifactoryClient {
             throw new IOException("Failed to pull package from artifactory : " + e.getMessage());
         }
     }
-
-
-    /*
-     * Params:
-     *   - org : String          (organization name)
-     *   - packageName : String  (package name)
-     *   Description: Queries the repository for available versions and returns the existing versions.
-     */
 
     /**
      * Query the repository for the list of existing versions for the package.
@@ -617,6 +647,7 @@ public class ArtifactoryClient {
             }
         }
         try {
+            // Use non-deprecated File-first overload to avoid deprecated MediaType-first overload in this OkHttp version.
             RequestBody requestBody = RequestBody.create(balaPath.toFile(), MediaType.parse("application/octet-stream"));
             String targetPath = org + "/" + pkg + "/" + version + "/" + balaPath.toFile().getName();
 
@@ -640,5 +671,6 @@ public class ArtifactoryClient {
              throw new IOException("Failed to push package to artifactory : " + e.getMessage(), e);
          }
     }
-}
 
+    
+}
