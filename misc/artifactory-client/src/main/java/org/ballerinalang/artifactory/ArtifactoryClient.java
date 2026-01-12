@@ -152,6 +152,7 @@ public class ArtifactoryClient {
                 .connectTimeout(Duration.ofMinutes(5))
                 .readTimeout(Duration.ofMinutes(5))
                 .writeTimeout(Duration.ofMinutes(5))
+                .addInterceptor(new RetryInterceptor(1, 1000))
                 .build();
     }
 

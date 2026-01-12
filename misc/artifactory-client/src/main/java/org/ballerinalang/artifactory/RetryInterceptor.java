@@ -1,14 +1,15 @@
 package org.ballerinalang.artifactory;
 
-import okhttp3.Interceptor;
-import okhttp3.Request;
-import okhttp3.Response;
 import java.io.IOException;
 import java.util.Set;
 
+import okhttp3.Interceptor;
+import okhttp3.Request;
+import okhttp3.Response;
+
 public class RetryInterceptor implements Interceptor {
     private static final Set<String> RETRIABLE_METHODS =
-            Set.of("GET","HEAD");
+            Set.of("GET","HEAD","PUT","POST");
 
     private final int maxRetries;
     private final long baseDelayMs;
