@@ -66,7 +66,6 @@ public class ArtifactoryClient {
     private final String password;
     private final Path localRepoBase;
     private final PrintStream outStream;
-    private static final OkHttpClient HTTP_CLIENT = new OkHttpClient();
     private final OkHttpClient client;
     private OkHttpClient httpClient() {
         return this.client;
@@ -77,14 +76,6 @@ public class ArtifactoryClient {
             {"X-Checksum-Sha1", ".sha1", "SHA-1"},
             {"X-Checksum-Md5", ".md5", "MD5"}
     };
-
-    private enum CompatibleRange {
-        LATEST,
-        LOCK_MAJOR,
-        LOCK_MINOR,
-        EXACT
-    }
-
 
     /**
      * Create an instance of ArtifactoryClient.
@@ -116,7 +107,9 @@ public class ArtifactoryClient {
      * @param username      the username for basic authentication
      * @param password      the password for basic authentication
      * @param localRepoBase the custom local repository base path
-     * @param outStream     the PrintStream to use for output (e.g., System.out)
+     * @param outStream     the PrintStream to use for output (e.g., System.out). If {@code null},
+     *                      {@link System#out} will be used. Pass a custom PrintStream to capture or
+     *                      redirect diagnostic output in tests or when integrating with a logging system.
      */
     public ArtifactoryClient(String repositoryUrl, String username, String password, Path localRepoBase,
                              PrintStream outStream) {
@@ -147,12 +140,12 @@ public class ArtifactoryClient {
         } else {
             this.localRepoBase = Paths.get(System.getProperty("user.home"), ".ballerina", "repositories", "artifactory");
         }
-        // configure a single client for this instance (reuses internal connection pool)
-        this.client = HTTP_CLIENT.newBuilder()
+        // configure a per-instance client with custom timeouts for connection, read, and write operations
+        this.client = new OkHttpClient.Builder()
                 .connectTimeout(Duration.ofMinutes(5))
                 .readTimeout(Duration.ofMinutes(5))
                 .writeTimeout(Duration.ofMinutes(5))
-                .addInterceptor(new RetryInterceptor(1, 1000))
+                .addInterceptor(new  RetryInterceptor(1, 1000))
                 .build();
     }
 
@@ -179,49 +172,44 @@ public class ArtifactoryClient {
      */
 
     private Map<String, String> fetchRemoteChecksums(String packagePath) throws IOException {
-         Map<String, String> checksums = new HashMap<>();
-         Request headReq = createRequestBuilder(packagePath).head().build();
-        // reuse the configured per-instance client (do not rebuild per request)
-         OkHttpClient client = this.httpClient();
-         try (Response headResp = client.newCall(headReq).execute()) {
-             if (headResp.isSuccessful()) {
-                 for (String[] map : HEADER_MAP) {
-                     String header = headResp.header(map[0]);
-                     if (header != null && !header.isEmpty()) {
-                         checksums.put(map[2], header.trim());
-                     }
-                 }
-                 return checksums;
-             } else {
-                 int code = headResp.code();
-                 // Treat 404 (not found) as "no checksums available" and return empty map so callers may
-                 // attempt to download the artifact. For other error codes, surface an IOException so the
-                 // caller can decide how to handle repository errors (auth, server error, etc.).
-                 if (code == 404) {
-                     return checksums;
-                 }
+        Map<String, String> checksums = new HashMap<>();
+        Request headReq = createRequestBuilder(packagePath).head().build();
+        OkHttpClient client = this.httpClient();
+        try (Response headResp = client.newCall(headReq).execute()) {
+            if (headResp.isSuccessful()) {
+                for (String[] map : HEADER_MAP) {
+                    String header = headResp.header(map[0]);
+                    if (header != null && !header.isEmpty()) {
+                        checksums.put(map[2], header.trim());
+                    }
+                }
+                return checksums;
+            } else {
+                int code = headResp.code();
+                // Treat 404 (not found) as "no checksums available" and return empty map so callers may
+                // attempt to download the artifact. For other error codes, surface an IOException so the
+                // caller can decide how to handle repository errors (auth, server error, etc.).
+                if (code == 404) {
+                    return checksums;
+                }
 
-                 String respBody = "";
-                 try {
-                     ResponseBody rb = headResp.body();
-                     if (rb != null) respBody = rb.string();
-                 } catch (Exception e) {
-                     respBody = "<error reading body: " + e.getMessage() + ">";
-                 }
+                String respBody = "";
+                try {
+                    ResponseBody rb = headResp.body();
+                    if (rb != null) respBody = rb.string();
+                } catch (Exception e) {
+                    respBody = "<error reading body: " + e.getMessage() + ">";
+                }
 
-                 // Log diagnostic info then throw to make the failure explicit to callers
-                 outStream.println("Error: Failed to fetch checksum headers for '" + packagePath + "' - HTTP/" + code + ": " + respBody);
-                 throw new IOException("Failed to fetch checksum headers for '" + packagePath + "' - HTTP/" + code + ": " + respBody);
-             }
-
-         } catch (IOException e) {
-            // Network/IO issues should be propagated to the caller for proper handling
-            throw e;
-         } catch (Exception e) {
-            // Wrap unexpected exceptions as IOExceptions
-            throw new IOException("Unexpected error while fetching checksum headers: " + e.getMessage(), e);
-         }
-     }
+                // Log diagnostic info then throw to make the failure explicit to callers
+                outStream.println("Error: Failed to fetch checksum headers for '" + packagePath + "' - HTTP/" + code + ": " + respBody);
+                throw new IOException("Failed to fetch checksum headers for '" + packagePath + "' - HTTP/" + code + ": " + respBody);
+            }
+        } catch (Exception e) {
+            // Preserve original exception type
+            throw e instanceof IOException ? (IOException) e : new IOException("Unexpected error while fetching checksum headers", e);
+        }
+    }
 
 
     // This method extracts the filename from any valid Content-Disposition header, cleans it up, decodes it if needed, and rewrites it into a safe, predictable attachment; filename=<name> format.
@@ -314,34 +302,29 @@ public class ArtifactoryClient {
                 // i.e. <user.home>/.ballerina/bala_cache/<org>/<pkgName>
                 Path pkgPathInBalaCache = this.localRepoBase.resolve(org).resolve(pkgName);
                 // Pass the response and delegate saving + extraction to central client's Utils
-               try {
-                   // Replace the content-disposition/newUrl handling in the pullPackage try-block with:
-                   String rawContentDisposition = Optional.ofNullable(requestFile.header("Content-Disposition")).orElse("");
-                   String contentDisposition = sanitizeContentDispositionHeader(rawContentDisposition);
+                try {
+                    String rawContentDisposition = Optional.ofNullable(requestFile.header("Content-Disposition")).orElse("");
+                    String contentDisposition = sanitizeContentDispositionHeader(rawContentDisposition);
 
-                   String newUrl = "";
-                   if (requestFile.request() != null && requestFile.request().url() != null) {
-                       newUrl = requestFile.request().url().toString();
-                   }
+                    String newUrl = "";
+                    if (requestFile.request() != null && requestFile.request().url() != null) {
+                        newUrl = requestFile.request().url().toString();
+                    }
 
-                   // Build the trueDigest value expected by Utils.createBalaInHomeRepo
-                   String sha256Header = checksums.getOrDefault("SHA-256", "");
-                   String trueDigest = sha256Header.isEmpty() ? "" : CentralClientConstants.SHA256 + sha256Header;
+                    // Build the trueDigest value expected by Utils.createBalaInHomeRepo
+                    String sha256Header = checksums.getOrDefault("SHA-256", "");
+                    String trueDigest = sha256Header.isEmpty() ? "" : CentralClientConstants.SHA256 + sha256Header;
 
-                   Utils.createBalaInHomeRepo(requestFile, pkgPathInBalaCache, org, pkgName,
-                           false,
-                           null,
-                           newUrl,
-                           contentDisposition,
-                           outStream, new LogFormatter(),
-                           trueDigest);
-
-
-               } catch (CentralClientException e) {
-                   throw new IOException("Failed to save and extract BALA into home repo: " + e.getMessage(), e);
-               }
-
-
+                    Utils.createBalaInHomeRepo(requestFile, pkgPathInBalaCache, org, pkgName,
+                            false,
+                            null,
+                            newUrl,
+                            contentDisposition,
+                            outStream, new LogFormatter(),
+                            trueDigest);
+                } catch (CentralClientException e) {
+                    throw new IOException("Failed to save and extract BALA into home repo: " + e.getMessage(), e);
+                }
             } else {
                 // Read body (if any) for debugging and include headers
                 String respBody = "";
@@ -354,8 +337,9 @@ public class ArtifactoryClient {
 
                 throw new IOException("Failed to pull package from artifactory: " + requestFile.code() + " - " + respBody);
             }
-        } catch (IOException e) {
-            throw new IOException(e.getMessage(), e);
+        } catch (Exception e) {
+            // Preserve original exception type
+            throw e instanceof IOException ? (IOException) e : new IOException("Failed to pull package from artifactory", e);
         }
     }
 
@@ -378,16 +362,12 @@ public class ArtifactoryClient {
             throw new IllegalArgumentException("Package name must be provided and non-empty");
         }
 
-        try {
-            String latestVersion = getLatestVersion(org, pkgName);         
-            if (latestVersion == null) {
-                throw new IOException("No versions available for package: " + org + "/" + pkgName);
-            }
-            outStream.println("Latest version: " + latestVersion);
-            pullPackage(org, pkgName, latestVersion);
-        } catch (Exception e) {
-            throw new IOException("Failed to pull package from artifactory : " + e.getMessage());
+        String latestVersion = getLatestVersion(org, pkgName);
+        if (latestVersion == null) {
+            throw new IOException("No versions available for package: " + org + "/" + pkgName);
         }
+        outStream.println("Latest version: " + latestVersion);
+        pullPackage(org, pkgName, latestVersion);
     }
 
     /**
@@ -465,11 +445,9 @@ public class ArtifactoryClient {
                     // JSON parse error — try next candidate
                     continue;
                 }
-            } catch (IOException e) {
-                // Rethrow IOExceptions; these are network/IO errors we don't want to mask
-                throw e;
             } catch (Exception e) {
-                throw new IOException("Failed to get latest version from artifactory : " + e.getMessage(), e);
+                // Preserve original exception type
+                throw e instanceof IOException ? (IOException) e : new IOException("Failed to get versions from artifactory", e);
             }
         }
 
@@ -478,12 +456,6 @@ public class ArtifactoryClient {
         return Collections.emptyList();
     }
 
-    /*
-     * Params:
-     *   - org : String          (organization name)
-     *   - packageName : String  (package name)
-     *   Description: Queries the existing versions and returns the latest according to SemVer.
-     */
     /**
      * Return the semver-highest version available for the given package.
      *
@@ -520,80 +492,6 @@ public class ArtifactoryClient {
         }
         return VersionResolver.resolve(versions, requestedVersion, mode);
     }
-
-    // Helper: pick the highest semver from a list using SemVerUtils comparator
-    private String pickHighestVersion(List<String> versions) {
-        return Collections.max(versions, (v1, v2) -> SemVerUtils.compareSemVer(v1, v2));
-    }
-
-    // Helper: determine whether candidateVersion falls into compatible range relative to minVersion
-    private boolean isInCompatibleRange(String minVersion, String candidateVersion, CompatibleRange range) {
-        // If range is LATEST, everything is compatible
-        if (range == CompatibleRange.LATEST) {
-            return true;
-        }
-
-        // Parse numeric parts (major.minor.patch) ignoring pre-release/build metadata
-        int[] minParts = parseSemVerParts(minVersion);
-        int[] candParts = parseSemVerParts(candidateVersion);
-        if (minParts == null || candParts == null) {
-            // If parsing fails, conservatively include candidate only if compareSemVer >= 0
-            return SemVerUtils.compareSemVer(candidateVersion, minVersion) >= 0;
-        }
-
-        // candidate must be >= minVersion
-        if (SemVerUtils.compareSemVer(candidateVersion, minVersion) < 0) {
-            return false;
-        }
-
-        switch (range) {
-            case LOCK_MAJOR:
-                return candParts[0] == minParts[0];
-            case LOCK_MINOR:
-                return candParts[0] == minParts[0] && candParts[1] == minParts[1];
-            case EXACT:
-                return candidateVersion.equals(minVersion);
-            default:
-                return false;
-        }
-    }
-
-    // Parse semver string like "1.2.3" or "1.2.3-beta" into {major, minor, patch}
-    private int[] parseSemVerParts(String version) {
-        if (version == null) return null;
-        // Strip pre-release/build suffix starting at first non-digit after patch
-        String core = version;
-        int idx = version.indexOf('-');
-        if (idx != -1) core = version.substring(0, idx);
-        idx = core.indexOf('+');
-        if (idx != -1) core = core.substring(0, idx);
-
-        String[] parts = core.split("\\.");
-        if (parts.length < 3) return null;
-        try {
-            int major = Integer.parseInt(parts[0]);
-            int minor = Integer.parseInt(parts[1]);
-            // patch may include non-digit characters if malformed; parse up to non-digit
-            String patchStr = parts[2];
-            // strip any non-digit suffix
-            int j = 0;
-            while (j < patchStr.length() && Character.isDigit(patchStr.charAt(j))) j++;
-            if (j == 0) return null;
-            int patch = Integer.parseInt(patchStr.substring(0, j));
-            return new int[]{major, minor, patch};
-        } catch (NumberFormatException e) {
-            return null;
-        }
-    }
-
-    /*
-     * Method: pushPackage
-     * Params:
-     *   - org : String      (organization name)
-     *   - pkg : String      (package name)
-     *   - version : String  (package version)
-     * Description: Uploads a .bala file to Artifactory with checksum headers.
-     */
 
     /**
      * Upload a .bala file to the configured Artifactory repository.
@@ -648,7 +546,6 @@ public class ArtifactoryClient {
             }
         }
         try {
-            // Use non-deprecated File-first overload to avoid deprecated MediaType-first overload in this OkHttp version.
             RequestBody requestBody = RequestBody.create(balaPath.toFile(), MediaType.parse("application/octet-stream"));
             String targetPath = org + "/" + pkg + "/" + version + "/" + balaPath.toFile().getName();
 
@@ -658,20 +555,15 @@ public class ArtifactoryClient {
             // reuse the configured per-instance client
             OkHttpClient client = this.httpClient();
             try (Response response = client.newCall(request).execute()) {
-                 if (response.isSuccessful()) {
+                if (response.isSuccessful()) {
                     outStream.println("Package pushed successfully to artifactory with status code: " + response.code());
                 } else {
                     throw new IOException("Failed to push package to artifactory: " + response.message());
                 }
-             }
-         } catch (IOException ioe) {
-             // propagate IOExceptions (including invalid version) to the caller
-             throw ioe;
-         } catch (Exception e) {
-             // wrap other unexpected exceptions as IOExceptions so caller gets a failure
-             throw new IOException("Failed to push package to artifactory : " + e.getMessage(), e);
-         }
+            }
+        } catch (Exception e) {
+            // Preserve original exception type
+            throw e instanceof IOException ? (IOException) e : new IOException("Failed to push package to artifactory", e);
+        }
     }
-
-    
 }
