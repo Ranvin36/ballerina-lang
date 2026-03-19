@@ -19,14 +19,7 @@ package io.ballerina.projects;
 
 import com.google.gson.JsonSyntaxException;
 import io.ballerina.projects.DependencyGraph.DependencyGraphBuilder;
-import io.ballerina.projects.environment.ModuleLoadRequest;
-import io.ballerina.projects.environment.PackageCache;
-import io.ballerina.projects.environment.PackageLockingMode;
-import io.ballerina.projects.environment.PackageResolver;
-import io.ballerina.projects.environment.ProjectEnvironment;
-import io.ballerina.projects.environment.ResolutionOptions;
-import io.ballerina.projects.environment.ResolutionRequest;
-import io.ballerina.projects.environment.ResolutionResponse;
+import io.ballerina.projects.environment.*;
 import io.ballerina.projects.internal.BlendedManifest;
 import io.ballerina.projects.internal.DefaultDiagnosticResult;
 import io.ballerina.projects.internal.ImportModuleRequest;
@@ -38,9 +31,7 @@ import io.ballerina.projects.internal.ProjectDiagnosticErrorCode;
 import io.ballerina.projects.internal.ResolutionEngine;
 import io.ballerina.projects.internal.ResolutionEngine.DependencyNode;
 import io.ballerina.projects.internal.model.BuildJson;
-import io.ballerina.projects.internal.repositories.CustomPkgRepositoryContainer;
-import io.ballerina.projects.internal.repositories.LocalPackageRepository;
-import io.ballerina.projects.internal.repositories.MavenPackageRepository;
+import io.ballerina.projects.internal.repositories.*;
 import io.ballerina.projects.util.ProjectUtils;
 import io.ballerina.tools.diagnostics.Diagnostic;
 import io.ballerina.tools.diagnostics.DiagnosticInfo;
@@ -722,9 +713,12 @@ public class PackageResolution {
                                                   ProjectEnvironment projectEnvContext, boolean offline) {
         Map<String, MavenPackageRepository> customPackageRepositoryMap =
                 projectEnvContext.getService(CustomPkgRepositoryContainer.class).getCustomPackageRepositories();
+        Map<String, ArtifactoryPackageRepository> artifactoryPackageRepositoryMap =
+                projectEnvContext.getService(CustomPkgRepositoryContainer.class).getArtifactoryPackageRepositories();
+
         return BlendedManifest.from(rootPackageContext.dependencyManifest(),
                 rootPackageContext.packageManifest(),
-                projectEnvContext.getService(LocalPackageRepository.class), customPackageRepositoryMap, offline);
+                projectEnvContext.getService(LocalPackageRepository.class), customPackageRepositoryMap, artifactoryPackageRepositoryMap,offline);
     }
 
     private ResolutionOptions getResolutionOptions(CompilationOptions compilationOptions) {

@@ -4,13 +4,10 @@ import io.ballerina.projects.ProjectException;
 import io.ballerina.projects.Settings;
 import io.ballerina.projects.TomlDocument;
 import io.ballerina.projects.environment.Environment;
+import io.ballerina.projects.environment.PackageRepository;
 import io.ballerina.projects.internal.SettingsBuilder;
 import io.ballerina.projects.internal.model.Repository;
-import io.ballerina.projects.internal.repositories.CustomPkgRepositoryContainer;
-import io.ballerina.projects.internal.repositories.FileSystemRepository;
-import io.ballerina.projects.internal.repositories.LocalPackageRepository;
-import io.ballerina.projects.internal.repositories.MavenPackageRepository;
-import io.ballerina.projects.internal.repositories.RemotePackageRepository;
+import io.ballerina.projects.internal.repositories.*;
 import io.ballerina.projects.util.ProjectConstants;
 import org.wso2.ballerinalang.compiler.util.ProjectDirConstants;
 import org.wso2.ballerinalang.util.RepoUtils;
@@ -23,6 +20,7 @@ import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 
+import static io.ballerina.projects.internal.SettingsBuilder.ARTIFACTORY;
 import static io.ballerina.projects.internal.SettingsBuilder.MAVEN;
 import static io.ballerina.runtime.api.constants.RuntimeConstants.USER_HOME;
 
@@ -37,6 +35,7 @@ public final class BallerinaUserHome {
     private final RemotePackageRepository remotePackageRepository;
     private final LocalPackageRepository localPackageRepository;
     private Map<String, MavenPackageRepository> mavenCustomRepositories;
+    private Map<String, ArtifactoryPackageRepository> artifactoryCustomRepositories;
     private Map<String, FileSystemRepository> customFSRepositories;
 
     private BallerinaUserHome(Environment environment, Path ballerinaUserHomeDirPath) {
@@ -61,6 +60,7 @@ public final class BallerinaUserHome {
 
     private void createCustomRepositories(Environment environment) {
         mavenCustomRepositories = new HashMap<>();
+        artifactoryCustomRepositories = new HashMap<>();
         customFSRepositories = new HashMap<>();
         Repository[] repositories = readSettings().getRepositories();
         for (Repository repository : repositories) {
@@ -76,6 +76,30 @@ public final class BallerinaUserHome {
 
                 if (!mavenCustomRepositories.containsKey(repository.id())) {
                     mavenCustomRepositories.put(repository.id(), MavenPackageRepository.from(
+                            environment, repositoryPath, repository));
+                }
+                continue;
+            }
+            if(ARTIFACTORY.equals(repository.type())) {
+                String folderName = sanitizeRepoFolderName(repository.id());
+                if (folderName.isEmpty()) {
+                    folderName = sanitizeRepoFolderName(repository.url());
+                }
+                if (folderName.isEmpty()) {
+                    folderName = "repo-" + System.nanoTime();
+                }
+                Path repositoryPath = ballerinaUserHomeDirPath.resolve(ProjectConstants.REPOSITORIES_DIR)
+                        .resolve(folderName);
+                System.out.println(repositoryPath);
+                try {
+                    Files.createDirectories(repositoryPath);
+                } catch (IOException exception) {
+                    throw new ProjectException("unable to create repository for repository.id='" + repository.id() + "'" +
+                            " repository.url='" + repository.url() + "' at path: " + repositoryPath + " - "
+                            + exception.getMessage(), exception);
+                }
+                if(!artifactoryCustomRepositories.containsKey(repository.id())) {
+                    artifactoryCustomRepositories.put(repository.id(), ArtifactoryPackageRepository.from(
                             environment, repositoryPath, repository));
                 }
                 continue;
@@ -128,12 +152,16 @@ public final class BallerinaUserHome {
         return this.mavenCustomRepositories;
     }
 
+    public Map<String, ArtifactoryPackageRepository> artifactoryRepositories() {
+        return this.artifactoryCustomRepositories;
+    }
+
     public Map<String, FileSystemRepository> customFSRepositories() {
         return this.customFSRepositories;
     }
 
     public CustomPkgRepositoryContainer customPkgRepositoryContainer() {
-        return new CustomPkgRepositoryContainer(mavenCustomRepositories);
+        return new CustomPkgRepositoryContainer(mavenCustomRepositories, artifactoryCustomRepositories);
     }
 
     public LocalPackageRepository localPackageRepository() {
@@ -192,5 +220,20 @@ public final class BallerinaUserHome {
         }
         String ballerinaShortVersion = RepoUtils.getBallerinaShortVersion();
         return new LocalPackageRepository(environment, repositoryPath, ballerinaShortVersion);
+    }
+
+    private static String sanitizeRepoFolderName(String name) {
+        if (name == null) {
+            return "";
+        }
+        // Remove characters that are invalid in Windows file names and generally unsafe for folder names
+        String sanitized = name.replaceAll("[\\\\/:*?\"<>|]", "_");
+        // Trim and collapse sequences of underscores
+        sanitized = sanitized.trim().replaceAll("_+", "_");
+        // If sanitized becomes just empty or just dots, return empty string to trigger fallback
+        if (sanitized.isEmpty() || sanitized.matches("^[.\\s]*$")) {
+            return "";
+        }
+        return sanitized;
     }
 }

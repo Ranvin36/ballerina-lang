@@ -1,0 +1,24 @@
+/*
+ * Minimal Gradle build for the artifactory-client module.
+ * Aligns with other modules that use the shared `javaProject` convention plugin
+ * so the project exposes a Java library variant for dependent modules.
+ */
+
+plugins {
+    id 'javaProject'
+}
+
+configurations.all {
+    resolutionStrategy.preferProjectModules()
+}
+
+dependencies {
+    implementation project(':central-client')
+    implementation libs.squareup.okhttp
+    implementation libs.gson
+}
+
+description = 'Artifactory client used by Ballerina CLI'
+
+ext.moduleName = 'artifactory-client'
+

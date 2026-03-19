@@ -32,6 +32,7 @@ import io.ballerina.projects.internal.model.Repository;
 import io.ballerina.projects.util.ProjectConstants;
 import io.ballerina.projects.util.ProjectUtils;
 import org.apache.commons.io.FileUtils;
+import org.ballerinalang.artifactory.ArtifactoryClient;
 import org.ballerinalang.central.client.CentralAPIClient;
 import org.ballerinalang.central.client.CentralClientConstants;
 import org.ballerinalang.central.client.exceptions.CentralClientException;
@@ -55,9 +56,7 @@ import java.util.stream.Collectors;
 
 import static io.ballerina.cli.cmd.Constants.PULL_COMMAND;
 import static io.ballerina.cli.launcher.LauncherUtils.createLauncherException;
-import static io.ballerina.projects.util.ProjectConstants.BALA_EXTENSION;
-import static io.ballerina.projects.util.ProjectConstants.LOCAL_REPOSITORY_NAME;
-import static io.ballerina.projects.util.ProjectConstants.PLATFORM;
+import static io.ballerina.projects.util.ProjectConstants.*;
 import static io.ballerina.projects.util.ProjectUtils.getAccessTokenOfCLI;
 import static io.ballerina.projects.util.ProjectUtils.initializeProxy;
 import static io.ballerina.projects.util.ProjectUtils.validateOrgName;
@@ -199,11 +198,21 @@ public class PullCommand implements BLauncherCmd {
 
         Settings settings;
         settings = RepoUtils.readSettings();
+        Repository repo = null;
+        for(Repository repository : settings.getRepositories()) {
+            if (repositoryName != null && repositoryName.equals(repository.id())) {
+                repo=repository;
+                break;
+            }
+        }
 
         if (repositoryName == null) {
             repositoryName = ProjectConstants.CENTRAL_REPOSITORY_CACHE_NAME;
             version = pullFromCentral(settings, orgName, packageName, version);
-        } else if (!LOCAL_REPOSITORY_NAME.equals(repositoryName)) {
+        } else if (repo != null && "artifactory".equals(repo.type())) {
+            version = pullFromArtifactory(settings, orgName, packageName, version);
+        }
+        else if (!LOCAL_REPOSITORY_NAME.equals(repositoryName)) {
             pullFromMavenRepo(settings, orgName, packageName, version);
         }
 
@@ -329,6 +338,82 @@ public class PullCommand implements BLauncherCmd {
             out.println("Successfully pulled the package from the custom repository.");
         }
     }
+
+    private String pullFromArtifactory(Settings settings, String orgName, String pkgName, String version) {
+        // Find the repository entry from settings
+        Repository targetRepository = null;
+        for (Repository repository : settings.getRepositories()) {
+            if (repositoryName != null && repositoryName.equals(repository.id())) {
+                targetRepository = repository;
+                break;
+            }
+        }
+
+        if (targetRepository == null) {
+            String errMsg = "unsupported repository '" + repositoryName + "' found. Only repositories mentioned in the Settings.toml are supported.";
+            CommandUtil.printError(this.errStream, errMsg, null, false);
+            CommandUtil.exitError(this.exitWhenFinish);
+            return version;
+        }
+
+        // Construct the repository root under home repositories (without the 'bala' segment)
+        Path localPkgDir = RepoUtils.createAndGetHomeReposPath()
+                .resolve(ProjectConstants.REPOSITORIES_DIR)
+                .resolve(targetRepository.id());
+
+        try {
+            // If the user didn't specify a version, call artifactory to find the latest version
+            if (version == null || version.equals(Names.EMPTY.getValue())) {
+                ArtifactoryClient tmpClient = new ArtifactoryClient(targetRepository.url(),
+                        targetRepository.username(), targetRepository.password());
+                try {
+                    String latest = tmpClient.getLatestVersion(orgName, pkgName);
+                    if (latest == null) {
+                        CommandUtil.printError(this.errStream, "package not found: " + orgName + "/" + pkgName, null, false);
+                        CommandUtil.exitError(this.exitWhenFinish);
+                        return version;
+                    }
+                    version = latest;
+                } catch (IOException e) {
+                    CommandUtil.printError(this.errStream, "error while resolving latest version from artifactory: " + e.getMessage(), null, false);
+                    CommandUtil.exitError(this.exitWhenFinish);
+                    return version;
+                }
+            }
+
+            // If package already exists locally, skip
+            if (Files.exists(localPkgDir.resolve(BALA_DIR_NAME).resolve(orgName).resolve(pkgName).resolve(version))) {
+                outStream.println("Package already exists.\n");
+                return version;
+            }
+
+            // Ensure the package directory exists
+            try {
+                Files.createDirectories(localPkgDir);
+            } catch (IOException e) {
+                throw createLauncherException(
+                        "unexpected error occurred while creating package repository in bala cache: " + e.getMessage());
+            }
+
+            // Create ArtifactoryClient; pass the 'bala' directory as the default localRepoBase (safe fallback)
+            ArtifactoryClient artifactoryClient = new ArtifactoryClient(targetRepository.url(), targetRepository.username(),
+                    targetRepository.password(), localPkgDir);
+
+            // Delegate the download to ArtifactoryClient which will save/extract into the provided repoRoot
+            try {
+                artifactoryClient.pullPackage(orgName, pkgName, version, String.valueOf(localPkgDir));
+                outStream.println("Successfully pulled the package from the artifactory repository.");
+            } catch (IOException e) {
+                CommandUtil.printError(this.errStream, "error while pulling package from artifactory: " + e.getMessage(), null, false);
+                CommandUtil.exitError(this.exitWhenFinish);
+            }
+         } catch (ProjectException pe) {
+             CommandUtil.printError(this.errStream, "error while pulling package: " + pe.getMessage(), null, false);
+             CommandUtil.exitError(this.exitWhenFinish);
+         }
+
+         return version;
+     }
 
     private boolean resolveDependencies(String orgName, String packageName, String version) {
         CommandUtil.setPrintStream(errStream);

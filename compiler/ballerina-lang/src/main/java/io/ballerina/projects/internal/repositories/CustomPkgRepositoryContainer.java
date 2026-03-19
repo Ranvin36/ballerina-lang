@@ -15,6 +15,9 @@
  */
 package io.ballerina.projects.internal.repositories;
 
+import io.ballerina.projects.environment.PackageRepository;
+
+import java.util.HashMap;
 import java.util.Map;
 
 /**
@@ -25,11 +28,35 @@ import java.util.Map;
 
 public class CustomPkgRepositoryContainer {
     Map<String, MavenPackageRepository> customPackageRepositories;
+    Map<String, ArtifactoryPackageRepository> artifactoryPackageRepositories;
     public CustomPkgRepositoryContainer(Map<String, MavenPackageRepository> customPackageRepositories) {
-        this.customPackageRepositories = customPackageRepositories;
+        // Delegate to the two-arg constructor (defensive: convert nulls to empty maps)
+        this(customPackageRepositories, null);
+    }
+
+    public CustomPkgRepositoryContainer(Map<String, MavenPackageRepository> customPackageRepositories,
+                                         Map<String, ArtifactoryPackageRepository> artifactoryPackageRepositories) {
+        // Defensively initialize maps to empty maps when null to avoid NPEs on putAll calls.
+        this.customPackageRepositories = customPackageRepositories == null ? new HashMap<>() : customPackageRepositories;
+        this.artifactoryPackageRepositories = artifactoryPackageRepositories == null ? new HashMap<>() : artifactoryPackageRepositories;
     }
 
     public Map<String, MavenPackageRepository> getCustomPackageRepositories() {
         return customPackageRepositories;
     }
+
+    public Map<String, ArtifactoryPackageRepository> getArtifactoryPackageRepositories() {
+        return artifactoryPackageRepositories;
+    }
+
+//    public Map<String, PackageRepository> getAllCustomRepos() {
+//        Map<String, PackageRepository> allCustomRepos = new HashMap<>();
+//        if(customPackageRepositories != null) {
+//            allCustomRepos.putAll(customPackageRepositories);
+//        }
+//        if(artifactoryPackageRepositories != null) {
+//            allCustomRepos.putAll(artifactoryPackageRepositories);
+//        }
+//        return allCustomRepos;
+//    }
 }

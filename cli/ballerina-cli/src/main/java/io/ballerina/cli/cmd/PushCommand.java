@@ -42,6 +42,7 @@ import org.ballerinalang.central.client.exceptions.CentralClientException;
 import org.ballerinalang.central.client.exceptions.NoPackageException;
 import org.ballerinalang.maven.bala.client.MavenResolverClient;
 import org.ballerinalang.maven.bala.client.MavenResolverClientException;
+import org.ballerinalang.artifactory.ArtifactoryClient;
 import org.wso2.ballerinalang.util.RepoUtils;
 import picocli.CommandLine;
 
@@ -55,6 +56,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Arrays;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
@@ -69,6 +71,7 @@ import static io.ballerina.projects.util.ProjectConstants.SETTINGS_FILE_NAME;
 import static io.ballerina.projects.util.ProjectUtils.getAccessTokenOfCLI;
 import static io.ballerina.projects.util.ProjectUtils.initializeProxy;
 import static io.ballerina.runtime.api.constants.RuntimeConstants.SYSTEM_PROP_BAL_DEBUG;
+
 
 /**
  * This class represents the "bal push" command.
@@ -169,6 +172,7 @@ public class PushCommand implements BLauncherCmd {
                     if (repositoryName.equals(repository.id())) {
                         isCustomRepository = true;
                         targetRepository = repository;
+                        System.out.println("Repository Type : " + repository.type());
                         break;
                     }
                 }
@@ -195,6 +199,43 @@ public class PushCommand implements BLauncherCmd {
                     validateReadmeAndBalToml(balaPath);
                     pushBalaToCustomRepo(balaPath);
                     return;
+                }
+
+                if (isCustomRepository && Objects.equals(targetRepository.type(), "artifactory")){
+                    // For Artifactory repositories, construct an ArtifactoryClient and delegate the push
+                    // Note: validateReadmeAndBalToml is called for the explicit balaPath case below.
+                    System.out.println("Pushing Package to Artifactory repository: " + repositoryName);
+                    try {
+                        // Create a local bala directory under the home repositories path for consistency with repo consumers
+                        Path homeRepos = RepoUtils.createAndGetHomeReposPath()
+                                .resolve(ProjectConstants.REPOSITORIES_DIR)
+                                .resolve(repositoryName)
+                                .resolve(ProjectConstants.BALA_DIR_NAME);
+
+                        ArtifactoryClient artClient = new ArtifactoryClient(targetRepository.url(),
+                                targetRepository.username(), targetRepository.password(), homeRepos);
+
+                        if (balaPath == null) {
+                            // Build package and push
+                            pushPackage(project, artClient);
+                            return;
+                        } else {
+                            // User provided a .bala file
+                            if (!balaPath.toFile().exists()) {
+                                throw new ProjectException("path provided for the bala file does not exist: " + balaPath + ".");
+                            }
+                            if (!FileUtils.getExtension(balaPath).equals("bala")) {
+                                throw new ProjectException("file provided is not a bala file: " + balaPath + ".");
+                            }
+                            validateReadmeAndBalToml(balaPath);
+                            pushPackageToArtifactory(balaPath, artClient);
+                            return;
+                        }
+                    } catch (IllegalArgumentException e) {
+                        // Wrap and show as project error to the CLI
+                        throw new ProjectException("error while initializing Artifactory client: " + e.getMessage(), e);
+                    }
+
                 }
 
                 MavenResolverClient mvnClient = new MavenResolverClient();
@@ -275,6 +316,11 @@ public class PushCommand implements BLauncherCmd {
 
     @Override
     public void setParentCmdParser(CommandLine parentCmdParser) {
+    }
+
+    private void pushPackage(BuildProject project, ArtifactoryClient client){
+        Path balaFilePath = validateBalaFile(project, this.balaPath);
+        pushPackageToArtifactory(balaFilePath, client);
     }
 
     private void pushPackage(BuildProject project) {
@@ -532,6 +578,35 @@ public class PushCommand implements BLauncherCmd {
                 client.pushPackage(balaPath, org, name, version, customRepoPath);
             } catch (MavenResolverClientException | IOException e) {
                 throw new ProjectException(e.getMessage());
+            }
+
+            Path relativePathToBalaFile;
+            if (this.balaPath != null) {
+                relativePathToBalaFile = balaPath;
+            } else {
+                relativePathToBalaFile = userDir.relativize(balaPath);
+            }
+            outStream.println("Successfully pushed " + relativePathToBalaFile
+                    + " to '" + repositoryName + "' repository.");
+        }
+    }
+
+    private void pushPackageToArtifactory(Path balaPath, ArtifactoryClient client){
+        Path balaFileName = balaPath.getFileName();
+        if (null != balaFileName) {
+            ProjectEnvironmentBuilder defaultBuilder = ProjectEnvironmentBuilder.getDefaultBuilder();
+            defaultBuilder.addCompilationCacheFactory(TempDirCompilationCache::from);
+            BalaProject balaProject = BalaProject.loadProject(defaultBuilder, balaPath);
+
+            // Validate manifest fields and filename-derived org/name/version
+            String org = balaProject.currentPackage().manifest().org().toString();
+            String name = balaProject.currentPackage().manifest().name().toString();
+            String version = balaProject.currentPackage().manifest().version().toString();
+
+            try {
+                client.pushPackage(balaPath);
+            } catch (IOException e) {
+                throw new ProjectException("error while pushing bala to artifactory: " + e.getMessage(), e);
             }
 
             Path relativePathToBalaFile;

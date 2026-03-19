@@ -52,6 +52,7 @@ public class SettingsBuilder {
 
     public static final String NAME = "name";
     public static final String MAVEN = "maven";
+    public static final String ARTIFACTORY = "artifactory";
     public static final String FILESYSTEM = "filesystem";
     private static final String CONNECT_TIMEOUT = "connectTimeout";
     private static final String READ_TIMEOUT = "readTimeout";
@@ -164,15 +165,24 @@ public class SettingsBuilder {
                 for (Map.Entry<String, TopLevelNode> entry : repoEntries.entrySet()) {
                     String repoKey = entry.getKey();
                     TopLevelNode repoValue = entry.getValue();
-                    if (!MAVEN.equals(repoKey) && !FILESYSTEM.equals(repoKey)) {
+                    if (!MAVEN.equals(repoKey) && !FILESYSTEM.equals(repoKey) && !ARTIFACTORY.equals(repoKey)) {
                         continue;
                     }
-                    List<TomlTableNode> repositoryNodes = ((TomlTableArrayNode) (repoValue)).children();
+                    List<TomlTableNode> repositoryNodes;
+                    try {
+                        repositoryNodes = ((TomlTableArrayNode) (repoValue)).children();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        continue;
+                    }
                     for (TomlTableNode repositoryNode : repositoryNodes) {
                         url = getStringOrDefaultFromTomlTableNode(repositoryNode, URL, "");
                         id = getStringOrDefaultFromTomlTableNode(repositoryNode, ID, "");
                         repositoryUsername = getStringOrDefaultFromTomlTableNode(repositoryNode, USERNAME, "");
                         repositoryPassword = getStringOrDefaultFromTomlTableNode(repositoryNode, ACCESS_TOKEN, "");
+                        if (repositoryPassword == null || repositoryPassword.isEmpty()) {
+                            repositoryPassword = getStringOrDefaultFromTomlTableNode(repositoryNode, PASSWORD, "");
+                        }
                         String pathStr = getStringOrDefaultFromTomlTableNode(repositoryNode, PATH, "");
                         if (!pathStr.isEmpty()) {
                             path = Path.of(pathStr);

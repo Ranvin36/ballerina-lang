@@ -27,6 +27,7 @@ import io.ballerina.projects.PackageVersion;
 import io.ballerina.projects.SemanticVersion.VersionCompatibilityResult;
 import io.ballerina.projects.environment.PackageRepository;
 import io.ballerina.projects.internal.repositories.AbstractPackageRepository;
+import io.ballerina.projects.internal.repositories.ArtifactoryPackageRepository;
 import io.ballerina.projects.internal.repositories.MavenPackageRepository;
 import io.ballerina.projects.util.ProjectConstants;
 import io.ballerina.projects.util.ProjectUtils;
@@ -65,6 +66,7 @@ public class BlendedManifest {
                                        PackageManifest packageManifest,
                                        AbstractPackageRepository localPackageRepository,
                                        Map<String, MavenPackageRepository> mavenPackageRepositoryMap,
+                                       Map<String, ArtifactoryPackageRepository> artifactoryPackageRepositoryMap,
                                        boolean offline) {
         List<Diagnostic> diagnostics = new ArrayList<>();
         PackageContainer<Dependency> depContainer = new PackageContainer<>();
@@ -88,7 +90,9 @@ public class BlendedManifest {
 
             if (depInPkgManifest.repository() != null) {
                 if (!depInPkgManifest.repository().equals(ProjectConstants.LOCAL_REPOSITORY_NAME) &&
-                    !mavenPackageRepositoryMap.containsKey(depInPkgManifest.repository())) {
+                    !mavenPackageRepositoryMap.containsKey(depInPkgManifest.repository()) &&
+                    !artifactoryPackageRepositoryMap.containsKey(depInPkgManifest.repository())
+                ) {
                     var diagnosticInfo = new DiagnosticInfo(
                             ProjectDiagnosticErrorCode.CUSTOM_REPOSITORY_NOT_FOUND.diagnosticId(),
                             "Provided custom repository (" + depInPkgManifest.repository() +
@@ -115,8 +119,38 @@ public class BlendedManifest {
                     continue;
                 }
 
-                if (!depInPkgManifest.repository().equals(ProjectConstants.LOCAL_REPOSITORY_NAME)) {
+                else if (artifactoryPackageRepositoryMap.containsKey(depInPkgManifest.repository())) {
+                    targetRepository = artifactoryPackageRepositoryMap.get(depInPkgManifest.repository());
+                    if (!((ArtifactoryPackageRepository) targetRepository).isPackageExists(depInPkgManifest.org(),
+                        depInPkgManifest.name(), depInPkgManifest.version())) {
+                    var diagnosticInfo = new DiagnosticInfo(
+                        ProjectDiagnosticErrorCode.PACKAGE_NOT_FOUND.diagnosticId(),
+                        "Dependency version (" + depInPkgManifest.version() +
+                            ") cannot be found in the Artifactory repository (" +
+                            depInPkgManifest.repository() + "). " +
+                            "org: `" + depInPkgManifest.org() + "` name: " + depInPkgManifest.name() + "",
+                        DiagnosticSeverity.WARNING);
+                    PackageDiagnostic diagnostic = new PackageDiagnostic(
+                        diagnosticInfo, depInPkgManifest.location().orElseThrow());
+                    diagnostics.add(diagnostic);
+                    continue;
+                    }
+                } else {
                     targetRepository = mavenPackageRepositoryMap.get(depInPkgManifest.repository());
+                    if (!((MavenPackageRepository) targetRepository).isPackageExists(depInPkgManifest.org(),
+                        depInPkgManifest.name(), depInPkgManifest.version())) {
+                        var diagnosticInfo = new DiagnosticInfo(
+                                ProjectDiagnosticErrorCode.PACKAGE_NOT_FOUND.diagnosticId(),
+                                "Dependency version (" + depInPkgManifest.version() +
+                                        ") cannot be found in the custom repository (" +
+                                        depInPkgManifest.repository() + "). " +
+                                        "org: `" + depInPkgManifest.org() + "` name: " + depInPkgManifest.name() + "",
+                                DiagnosticSeverity.WARNING);
+                        PackageDiagnostic diagnostic = new PackageDiagnostic(
+                                diagnosticInfo, depInPkgManifest.location().orElseThrow());
+                        diagnostics.add(diagnostic);
+                        continue;
+                    }
                 }
             } else {
                 Collection<String> moduleNames = existingDepOptional.isPresent() ?
@@ -139,6 +173,9 @@ public class BlendedManifest {
                     moduleNames = moduleNames(depInPkgManifest, localPackageRepository);
                 } else if (targetRepository instanceof MavenPackageRepository) {
                     moduleNames = moduleNames(depInPkgManifest, (MavenPackageRepository) targetRepository);
+                }
+                else if (targetRepository instanceof ArtifactoryPackageRepository) {
+                    moduleNames = moduleNames(depInPkgManifest, (AbstractPackageRepository) targetRepository);
                 } else {
                     // This should not be reached since the repo type is either maven or local
                     moduleNames = Collections.emptyList();
@@ -152,15 +189,20 @@ public class BlendedManifest {
                 Dependency existingDep = existingDepOptional.get();
                 VersionCompatibilityResult compatibilityResult =
                         depInPkgManifest.version().compareTo(existingDep.version());
+
                 if (compatibilityResult == VersionCompatibilityResult.EQUAL ||
                         compatibilityResult == VersionCompatibilityResult.GREATER_THAN) {
                     Collection<String> moduleNames;
-                    if (depInPkgManifest.repository().equals(ProjectConstants.LOCAL_REPOSITORY_NAME)) {
+                    if(depInPkgManifest.repository().equals(ProjectConstants.LOCAL_REPOSITORY_NAME)){
                         moduleNames = moduleNames(depInPkgManifest, localPackageRepository);
-                    } else if (targetRepository instanceof MavenPackageRepository) {
+                    }
+                    else if (targetRepository instanceof MavenPackageRepository) {
                         moduleNames = moduleNames(depInPkgManifest, (MavenPackageRepository) targetRepository);
-                    } else {
-                        // This should not be reached since the repo type is either maven or local
+                    }
+                    else if (targetRepository instanceof ArtifactoryPackageRepository){
+                        moduleNames = moduleNames(depInPkgManifest, (AbstractPackageRepository) targetRepository);
+                    }
+                    else {
                         moduleNames = Collections.emptyList();
                     }
                     Dependency newDep = new Dependency(depInPkgManifest.org(), depInPkgManifest.name(),
@@ -174,7 +216,7 @@ public class BlendedManifest {
                             "Dependency version (" + depInPkgManifest.version() + ") " +
                                     "is incompatible with the version locked in Dependencies.toml ("
                                     + existingDep.version + "). " +
-                                    "org: `" + existingDep.org() + "` name: " + existingDep.name(),
+                                    "org: `" + existingDep.org() + "` name: " + existingDep.name() + "",
                             DiagnosticSeverity.ERROR);
                     PackageDiagnostic diagnostic = new PackageDiagnostic(
                             diagnosticInfo, depInPkgManifest.location().orElseThrow());

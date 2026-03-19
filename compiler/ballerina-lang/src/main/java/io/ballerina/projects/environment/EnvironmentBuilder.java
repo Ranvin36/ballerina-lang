@@ -97,6 +97,9 @@ public class EnvironmentBuilder {
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
         customRepositories.putAll(ballerinaUserHome.customFSRepositories().entrySet().stream()
                 .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
+        customRepositories.putAll(ballerinaUserHome.artifactoryRepositories().entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
+
 
         WorkspaceRepository workspaceRepository = null;
         if (this.workspaceProject != null) {

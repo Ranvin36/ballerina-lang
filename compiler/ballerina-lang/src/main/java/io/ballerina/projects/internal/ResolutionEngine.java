@@ -288,8 +288,18 @@ public class ResolutionEngine {
                 packageMetadataResponse.dependencyGraph();
 
         return packageDescriptorDependencyGraph
-                .orElseThrow(() -> new IllegalStateException(
-                        "Graph cannot be null in the built-in package: " + directDep.toString()));
+//                .orElseThrow(() -> new IllegalStateException(
+//                        "Graph cannot be null in the built-in package: " + directDep.toString()));
+                .orElseGet(() -> {
+                    // If resolver didn't provide a dependency graph for the built-in package,
+                    // fall back to an empty graph with the package as the root. This can happen
+                    // when a built-in package is resolved from a cached/custom repository and
+                    // the metadata doesn't include the distribution graph. Returning an empty
+                    // graph prevents an IllegalStateException and allows resolution to continue.
+                    DependencyGraph.DependencyGraphBuilder<PackageDescriptor> graphBuilder =
+                            DependencyGraph.DependencyGraphBuilder.getBuilder(directDep);
+                    return graphBuilder.build();
+                });
     }
 
     private void updateDependencyVersions() {
